@@ -140,7 +140,13 @@ def plan_fair_rotation(
         raw_by_date.append(list(starts.values()))
 
     if raw_by_date:
-        window_start = min(item[1] for item in raw_by_date[0])
+        # The window spans every candidate of every date. Dates need not be
+        # sorted in the request, so taking the lower bound from the first
+        # listed date would miss busy intervals on an earlier date; scan all
+        # dates for both bounds.
+        window_start = min(
+            item[1] for by_date in raw_by_date for item in by_date
+        )
         window_end = max(
             item[2] for by_date in raw_by_date for item in by_date
         )

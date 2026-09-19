@@ -1175,7 +1175,7 @@ per date). Request body:
 | Field                 | Type   | Description                                                          |
 | --------------------- | ------ | -------------------------------------------------------------------- |
 | `organizer_timezone`  | string | IANA timezone in which `dates` and `candidate_times` are interpreted |
-| `dates`               | array  | Non-empty list of organizer-local dates (`YYYY-MM-DD`); one meeting per date, kept in input order |
+| `dates`               | array  | Non-empty list of organizer-local dates (`YYYY-MM-DD`); need not be chronological — one meeting per date, kept in input order |
 | `candidate_times`     | array  | Non-empty list of naive organizer-local start times (`HH:MM`); input order is the final tie-breaker |
 | `duration_minutes`    | integer | Meeting length shared by every meeting (must be > 0)                |
 | `participants`        | array  | Non-empty list of participants (see below); `participant_id` values must be unique |
@@ -1197,7 +1197,12 @@ Feasibility and cost semantics:
   engine, `STATUS:CANCELLED` and `TRANSP:TRANSPARENT` instances never
   block (a bad `TRANSP` is `422`), and `DATE` all-day events occupy local
   full days in the **participant's own** timezone. Two back-to-back
-  intervals that merely touch do not conflict.
+  intervals that merely touch do not conflict. The UTC busy query window
+  spans **every** listed date and candidate, so dates in
+  `dates` **need not be in chronological order** — an ordinary, recurring
+  or all-day busy event on an earlier date listed later in the request
+  still excludes its candidates (and a date whose every candidate is busy
+  still yields a `422` naming that organizer-local date).
 - A meeting's **deviation** for one participant is the number of meeting
   minutes that fall outside that participant's `preferred_ranges`,
   measured on the participant's own local clock. The ranges are
@@ -1233,10 +1238,12 @@ Feasibility and cost semantics:
   feasible schedules (the product of per-date feasible counts) exceeds
   **50 000**, the endpoint answers `422` without enumerating the space.
 
-The response lists one object per meeting (in date order) with its UTC
-`start`/`end`, the winning `candidate_index`, that meeting's per-person
-`deviations`, and each person's `cumulative_costs` after that meeting; it
-also returns the final `cumulative_costs`, `max_deviation`,
+The response lists one object per meeting **in the same order as the
+request's `dates` array** (which is independent of chronological order),
+with its UTC `start`/`end`, the winning `candidate_index`, that meeting's
+per-person `deviations`, and each person's `cumulative_costs` after that
+meeting; the top-level `dates` array is echoed verbatim in request order
+as well. It also returns the final `cumulative_costs`, `max_deviation`,
 `total_deviation`, and the number of `combinations` enumerated.
 
 ### Example
