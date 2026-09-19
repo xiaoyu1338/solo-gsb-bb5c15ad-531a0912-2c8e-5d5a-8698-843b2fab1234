@@ -1175,7 +1175,7 @@ per date). Request body:
 | Field                 | Type   | Description                                                          |
 | --------------------- | ------ | -------------------------------------------------------------------- |
 | `organizer_timezone`  | string | IANA timezone in which `dates` and `candidate_times` are interpreted |
-| `dates`               | array  | Non-empty list of organizer-local dates (`YYYY-MM-DD`); one meeting per date, kept in input order |
+| `dates`               | array  | Non-empty list of organizer-local dates (`YYYY-MM-DD`); one meeting per date, kept in input order — the dates need not be chronologically sorted |
 | `candidate_times`     | array  | Non-empty list of naive organizer-local start times (`HH:MM`); input order is the final tie-breaker |
 | `duration_minutes`    | integer | Meeting length shared by every meeting (must be > 0)                |
 | `participants`        | array  | Non-empty list of participants (see below); `participant_id` values must be unique |
@@ -1233,11 +1233,13 @@ Feasibility and cost semantics:
   feasible schedules (the product of per-date feasible counts) exceeds
   **50 000**, the endpoint answers `422` without enumerating the space.
 
-The response lists one object per meeting (in date order) with its UTC
-`start`/`end`, the winning `candidate_index`, that meeting's per-person
-`deviations`, and each person's `cumulative_costs` after that meeting; it
-also returns the final `cumulative_costs`, `max_deviation`,
-`total_deviation`, and the number of `combinations` enumerated.
+The response lists one object per meeting (in the request's `dates` order,
+which need not be chronological) with its UTC `start`/`end`, the winning
+`candidate_index`, that meeting's per-person `deviations`, and each
+person's `cumulative_costs` after that meeting — accumulated in that same
+request date order; it also returns the final `cumulative_costs`,
+`max_deviation`, `total_deviation`, and the number of `combinations`
+enumerated.
 
 ### Example
 
@@ -1648,6 +1650,14 @@ types) are normal request-validation `422`s.
   touching ones collapsed. A candidate survives iff its half-open
   `[start, end)` span overlaps none of any participant's busy intervals,
   so a busy event ending exactly at the candidate start does not block.
+- **Unsorted dates are safe**: the busy query window spans every
+  candidate on *every* date (earliest candidate start to latest candidate
+  end across the whole request), so plain, recurring and all-day busy
+  events block their candidates even when `dates` is not chronologically
+  ordered. The chosen meetings, their per-meeting costs and the
+  cumulative costs are still reported in the request's date order, and a
+  date with no feasible candidate is named in the `422` message exactly
+  as supplied.
 - **Deviation is measured in each participant's own local clock**: the
   meeting is projected onto the participant's timezone and compared
   against the preferred periods materialized on the local dates it

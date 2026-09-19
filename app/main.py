@@ -816,7 +816,8 @@ class FairRotationRequest(BaseModel):
         ...,
         min_length=1,
         description="Organizer-local dates of the rotating meetings (one "
-        "meeting is scheduled per date, in input order)",
+        "meeting is scheduled per date, in input order; the dates need not "
+        "be chronologically sorted)",
     )
     candidate_times: list[dt.time] = Field(
         ...,

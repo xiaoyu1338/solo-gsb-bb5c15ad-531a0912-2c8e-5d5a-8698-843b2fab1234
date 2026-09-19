@@ -308,6 +308,160 @@ def test_all_day_event_blocks_in_participant_timezone():
 
 
 # ---------------------------------------------------------------------------
+# Unsorted dates: the busy window spans every date, not just the first
+# ---------------------------------------------------------------------------
+
+
+def test_busy_on_earlier_second_date_still_blocks():
+    # Regression: the busy query window used to start at the FIRST date's
+    # candidates, so with unsorted dates the March 2 event was clipped
+    # away and the 08:00 candidate on March 2 looked free.
+    ics = cal(event_utc("a1", "20260302T080000Z", "20260302T090000Z"))
+    resp = rotation(
+        dates=("2026-03-10", "2026-03-02"),
+        participants=[participant("alice", ics=ics, preferred_ranges=[])],
+    )
+    assert resp.status_code == 200
+    meetings = resp.json()["meetings"]
+    # Meetings follow the request's date order, not chronology.
+    assert [m["date"] for m in meetings] == ["2026-03-10", "2026-03-02"]
+    # March 10 keeps 08:00; March 2 must dodge the 08:00-09:00Z busy hour.
+    assert [m["candidate_index"] for m in meetings] == [0, 1]
+    assert meetings[1]["start"] == "2026-03-02T16:00:00Z"
+
+
+def test_recurring_busy_blocks_on_unsorted_dates():
+    # A daily series covers both dates; with the window lower bound taken
+    # from the first date only, the March 2 occurrence would never be
+    # expanded and 08:00 on March 2 would look free.
+    ics = cal(
+        "BEGIN:VEVENT\r\n"
+        "UID:r1\r\nDTSTART:20260301T080000Z\r\nDTEND:20260301T090000Z\r\n"
+        "RRULE:FREQ=DAILY;COUNT=15\r\nEND:VEVENT\r\n"
+    )
+    resp = rotation(
+        dates=("2026-03-10", "2026-03-02"),
+        participants=[participant("alice", ics=ics, preferred_ranges=[])],
+    )
+    assert resp.status_code == 200
+    assert [m["candidate_index"] for m in resp.json()["meetings"]] == [1, 1]
+
+
+def test_all_day_busy_on_earlier_second_date_blocks():
+    # The all-day March 2 event covers the whole New York local day; the
+    # only candidate on March 2 conflicts, so the 422 names that date.
+    ics = cal(all_day("ad", "20260302", "20260303"))
+    resp = rotation(
+        dates=("2026-03-10", "2026-03-02"),
+        candidate_times=("08:00",),
+        participants=[
+            participant("alice", timezone="America/New_York", ics=ics)
+        ],
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "no feasible candidate" in detail
+    assert "2026-03-02" in detail
+
+
+def test_unsorted_dates_infeasible_earlier_date_returns_422():
+    # Every candidate on the out-of-order earlier date conflicts; the 422
+    # names that organizer-local date exactly as supplied.
+    ics = cal(event_utc("a1", "20260302T070000Z", "20260302T180000Z"))
+    resp = rotation(
+        dates=("2026-03-10", "2026-03-02"),
+        participants=[participant("alice", ics=ics, preferred_ranges=[])],
+    )
+    assert resp.status_code == 422
+    assert "2026-03-02" in resp.json()["detail"]
+
+
+def test_unsorted_dates_report_costs_in_request_date_order():
+    # With one candidate per date the schedule is forced; cumulative costs
+    # must accumulate in the request's date order (March 10 first), and
+    # each meeting is reported under its own organizer-local date.
+    resp = rotation(
+        dates=("2026-03-10", "2026-03-02"),
+        candidate_times=("08:00",),
+        participants=[
+            participant(
+                "alice",
+                preferred_ranges=[{"start": "08:00", "end": "09:00"}],
+            ),
+            participant(
+                "bob",
+                preferred_ranges=[{"start": "16:00", "end": "17:00"}],
+            ),
+        ],
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["dates"] == ["2026-03-10", "2026-03-02"]
+    assert [m["date"] for m in data["meetings"]] == ["2026-03-10", "2026-03-02"]
+    assert data["meetings"][0]["cumulative_costs"] == {"alice": 0, "bob": 60}
+    assert data["meetings"][1]["cumulative_costs"] == {"alice": 0, "bob": 120}
+    assert data["cumulative_costs"] == {"alice": 0, "bob": 120}
+
+
+def test_unsorted_dates_choose_the_same_candidate_per_date():
+    # The same dates in chronological and shuffled order must pick the
+    # same candidate on each date; only the response order differs.
+    ics = cal(event_utc("a1", "20260302T080000Z", "20260302T090000Z"))
+    participants = [
+        participant(
+            "alice",
+            ics=ics,
+            preferred_ranges=[{"start": "08:00", "end": "09:00"}],
+        ),
+        participant("bob", preferred_ranges=[{"start": "16:00", "end": "17:00"}]),
+    ]
+    sorted_resp = rotation(
+        dates=("2026-03-02", "2026-03-10"), participants=participants
+    )
+    shuffled_resp = rotation(
+        dates=("2026-03-10", "2026-03-02"), participants=participants
+    )
+    assert sorted_resp.status_code == shuffled_resp.status_code == 200
+    sorted_by_date = {m["date"]: m for m in sorted_resp.json()["meetings"]}
+    shuffled_by_date = {m["date"]: m for m in shuffled_resp.json()["meetings"]}
+    assert sorted_by_date.keys() == shuffled_by_date.keys()
+    for date, meeting in sorted_by_date.items():
+        other = shuffled_by_date[date]
+        assert meeting["candidate_index"] == other["candidate_index"]
+        assert meeting["start"] == other["start"]
+        assert meeting["deviations"] == other["deviations"]
+    assert [m["date"] for m in shuffled_resp.json()["meetings"]] == [
+        "2026-03-10",
+        "2026-03-02",
+    ]
+
+
+def test_unsorted_dates_across_dst_keep_local_busy_hours():
+    # Dates straddle the US spring forward (2026-03-08) out of order: the
+    # 09:00 New York local busy hour on the EST date occupies 14:00Z and
+    # must still block the 09:00 candidate there.
+    ics = cal(
+        event_local("e1", "20260306T090000", "20260306T100000", "America/New_York")
+    )
+    resp = rotation(
+        organizer_timezone="America/New_York",
+        dates=("2026-03-09", "2026-03-06"),
+        candidate_times=("09:00", "12:00"),
+        participants=[
+            participant("alice", timezone="America/New_York", ics=ics)
+        ],
+    )
+    assert resp.status_code == 200
+    meetings = resp.json()["meetings"]
+    assert [m["date"] for m in meetings] == ["2026-03-09", "2026-03-06"]
+    # March 9 (EDT) keeps 09:00 local = 13:00Z; March 6 (EST) dodges the
+    # 09:00-10:00 local busy hour to 12:00 local = 17:00Z.
+    assert [m["candidate_index"] for m in meetings] == [0, 1]
+    assert meetings[0]["start"] == "2026-03-09T13:00:00Z"
+    assert meetings[1]["start"] == "2026-03-06T17:00:00Z"
+
+
+# ---------------------------------------------------------------------------
 # DST handling in every timezone
 # ---------------------------------------------------------------------------
 

@@ -25,7 +25,10 @@ of the service: a candidate is feasible for a date only when it overlaps
 no busy interval of *any* participant. Busy intervals reuse the
 ``/freebusy-export`` semantics (CANCELLED and TRANSPARENT instances do not
 block, DATE all-day events occupy local full days in the participant's own
-timezone, and intervals are merged with touching ones collapsed).
+timezone, and intervals are merged with touching ones collapsed). The busy
+query window spans every candidate on *every* date, so ``dates`` may
+arrive in any order — meetings, per-meeting costs and cumulative costs are
+always reported in the request's date order.
 
 A candidate's deviation for one participant is the number of minutes of
 the meeting that fall outside that participant's preferred local periods,
@@ -139,8 +142,15 @@ def plan_fair_rotation(
             starts.setdefault(start, (index, start, start + duration))
         raw_by_date.append(list(starts.values()))
 
+    # The busy query window must cover every candidate on every date: the
+    # dates arrive in request order, which is not necessarily chronological,
+    # so the lower bound is the earliest candidate start across *all* dates
+    # (taking it from the first date alone would clip busy events on an
+    # earlier date listed later and leave its candidates unblocked).
     if raw_by_date:
-        window_start = min(item[1] for item in raw_by_date[0])
+        window_start = min(
+            item[1] for by_date in raw_by_date for item in by_date
+        )
         window_end = max(
             item[2] for by_date in raw_by_date for item in by_date
         )
